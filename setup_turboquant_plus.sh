@@ -20,6 +20,7 @@ BUILD_DIR="$INSTALL_DIR/build"
 REPO_URL="https://github.com/TheTom/llama-cpp-turboquant.git"
 REPO_BRANCH="feature/turboquant-kv-cache"
 MODEL_REPO="bartowski/Qwen_Qwen3.5-35B-A3B-GGUF"
+MODEL_GLOB="*Q6_K*"
 MODEL_DIR="$HOME/models/qwen35-35b-a3b"
 CPU_COUNT="$(sysctl -n hw.ncpu 2>/dev/null || echo 8)"
 RAM_BYTES="$(sysctl -n hw.memsize 2>/dev/null || echo 0)"
@@ -118,7 +119,7 @@ echo ""
 echo "  다운로드 예시:"
 echo "    pip install huggingface_hub"
 echo "    huggingface-cli download $MODEL_REPO \\"
-echo "      --include '*Q4_K_M*' \\"
+echo "      --include '$MODEL_GLOB' \\"
 echo "      --local-dir $MODEL_DIR"
 
 echo ""
@@ -128,10 +129,10 @@ cat > "$SCRIPT_DIR/tqp_chat.sh" <<EOFCHAT
 #!/bin/bash
 set -euo pipefail
 MODEL_DIR="\$HOME/models/qwen35-35b-a3b"
-MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*.gguf' | head -1 2>/dev/null)"
+MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*Q6_K*.gguf' | head -1 2>/dev/null)"
 if [ -z "\$MODEL_FILE" ]; then
     echo "모델 파일을 찾지 못했습니다: \$MODEL_DIR"
-    echo "huggingface-cli download $MODEL_REPO --include '*Q4_K_M*' --local-dir \$MODEL_DIR"
+    echo "huggingface-cli download $MODEL_REPO --include '$MODEL_GLOB' --local-dir \$MODEL_DIR"
     exit 1
 fi
 exec "$BUILD_DIR/bin/llama-cli" \
@@ -153,7 +154,7 @@ cat > "$SCRIPT_DIR/tqp_chat_turbo3.sh" <<EOFCHAT3
 #!/bin/bash
 set -euo pipefail
 MODEL_DIR="\$HOME/models/qwen35-35b-a3b"
-MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*.gguf' | head -1 2>/dev/null)"
+MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*Q6_K*.gguf' | head -1 2>/dev/null)"
 if [ -z "\$MODEL_FILE" ]; then
     echo "모델 파일을 찾지 못했습니다: \$MODEL_DIR"
     exit 1
@@ -177,7 +178,7 @@ cat > "$SCRIPT_DIR/tqp_server.sh" <<EOFSERVER
 #!/bin/bash
 set -euo pipefail
 MODEL_DIR="\$HOME/models/qwen35-35b-a3b"
-MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*.gguf' | head -1 2>/dev/null)"
+MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*Q6_K*.gguf' | head -1 2>/dev/null)"
 HOST="127.0.0.1"
 PORT="8080"
 if [ \$# -ge 1 ]; then HOST="\$1"; shift; fi
@@ -204,7 +205,7 @@ cat > "$SCRIPT_DIR/tqp_bench.sh" <<EOFBENCH
 #!/bin/bash
 set -euo pipefail
 MODEL_DIR="\$HOME/models/qwen35-35b-a3b"
-MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*.gguf' | head -1 2>/dev/null)"
+MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*Q6_K*.gguf' | head -1 2>/dev/null)"
 if [ -z "\$MODEL_FILE" ]; then
     echo "모델 파일을 찾지 못했습니다: \$MODEL_DIR"
     exit 1
@@ -236,6 +237,6 @@ echo -e "╚══════════════════════�
 echo ""
 echo "설치 경로: $INSTALL_DIR"
 echo "다음 단계:"
-echo "  1. huggingface-cli download $MODEL_REPO --include '*Q4_K_M*' --local-dir $MODEL_DIR"
+echo "  1. huggingface-cli download $MODEL_REPO --include '$MODEL_GLOB' --local-dir $MODEL_DIR"
 echo "  2. ./tqp_chat.sh"
 echo "  3. ./tqp_server.sh"
