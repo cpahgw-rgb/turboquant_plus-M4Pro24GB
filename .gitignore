@@ -1,0 +1,30 @@
+# Build artifacts
+build/
+*.o
+*.dylib
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.egg-info/
+
+# Models (large files)
+*.gguf
+*.bin
+*.safetensors
+models/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
