@@ -1,110 +1,69 @@
-# TurboQuant MLX — M4 Pro 48GB 로컬 LLM 가이드
+# TurboQuant MLX 실험 가이드
 
-## 환경
+이 문서는 이 저장소의 주력 경로가 아니라, `turboquant_mlx`를 Apple Silicon에서 실험적으로 설치해보는 보조 경로를 설명합니다.
 
-- **칩**: Apple M4 Pro
-- **메모리**: 48GB 통합 메모리
-- **프레임워크**: Apple MLX + TurboQuant KV Cache 압축
+## 먼저 알아둘 점
 
-## TurboQuant 핵심
+- 기본 추천 경로는 `setup_turboquant_plus.sh` 입니다.
+- 이 MLX 경로는 상류 `turboquant_mlx` 프로젝트를 빠르게 체험해보기 위한 보조 도구입니다.
+- 예전 버전처럼 `397B + 48GB`를 기본 시나리오로 가정하지 않습니다.
 
-Google Research (ICLR 2026)의 TurboQuant는 KV 캐시를 16비트 → 3비트로 압축합니다. PolarQuant(벡터 극좌표 변환)와 QJL(비편향 내적 추정)의 2단계를 통해 메모리 5배 절감, 정확도 손실 0을 달성합니다.
-
-48GB Mac에서 실질적으로 KV 캐시 ~80GB 효과를 얻어, 128K+ 토큰 컨텍스트가 가능합니다.
-
----
-
-## 모델 구성 (4-tier)
-
-| 모드 | 모델 | 크기 | 속도 | 용도 |
-|---|---|---|---|---|
-| **premium** | Qwen3.5-397B-A17B MoE (4-bit) | ~210GB (SSD) | 5-6 tok/s | GPT-4급 품질. 디스크 오프로딩 |
-| **primary** | Qwen3.5-27B-Claude-Opus-Distilled (4-bit) | ~16GB (RAM) | 15-22 tok/s | 범용 최강 (Claude Opus 증류) |
-| **reasoning** | DeepSeek R1 Distill 32B (4-bit) | ~19GB (RAM) | 12-18 tok/s | 수학/논리/분석 |
-| **fast** | Qwen3.5 9B (4-bit) | ~5GB (RAM) | 45-60 tok/s | 빠른 응답, 가벼운 작업 |
-
-### Premium 모델 설명
-
-Qwen3.5-397B-A17B는 총 397B 파라미터의 MoE(Mixture of Experts) 모델입니다. 토큰당 512개 전문가 중 10개만 활성화(17B 파라미터)하여 48GB RAM에서도 디스크 오프로딩으로 실행 가능합니다. 속도는 ~5-6 tok/s로 느리지만, 출력 품질이 GPT-4에 근접합니다. SSD에 ~210GB 여유 공간이 필요합니다.
-
-메모리 버짓 (primary/reasoning/fast): 모델 ~24GB + KV 캐시 ~16GB (TurboQuant 3-bit → 실질 ~80GB) + OS 8GB
-
----
-
-## 설치 & 사용
-
-### 1단계: 설치
+## 설치
 
 ```bash
-cd "Local LLM"
 chmod +x setup_turboquant.sh
 ./setup_turboquant.sh
 ```
 
-### 2단계: 모델 다운로드
+설치가 끝나면 아래 실행기가 생깁니다.
+
+- `./mlx_tq_chat.sh`
+- `./mlx_tq_server.sh`
+- `./mlx_tq_apply.py`
+
+## 기본 사용법
+
+기본 모델은 `mlx-community/Meta-Llama-3-8B-Instruct-4bit`로 잡혀 있습니다.
 
 ```bash
-# 기본 3종 다운로드 (~40GB)
-./download_models.sh
-
-# 프리미엄 모델 다운로드 (~210GB, 선택사항)
-./download_premium.sh
+./mlx_tq_chat.sh
 ```
 
-### 3단계: 사용
+다른 MLX 모델을 직접 넘길 수도 있습니다.
 
 ```bash
-# 대화형 채팅 (기본: primary 모델)
-./chat.sh
-
-# GPT-4급 프리미엄 모드 (느리지만 최고 품질)
-./chat.sh premium
-
-# 분석/추론 모드
-./chat.sh reasoning
-
-# 빠른 응답 모드
-./chat.sh fast
-
-# OpenAI 호환 API 서버
-./server.sh
+./mlx_tq_chat.sh mlx-community/Meta-Llama-3-8B-Instruct-4bit
 ```
 
-### 채팅 중 명령어
-
-| 명령 | 기능 |
-|---|---|
-| `/premium` | GPT-4급 프리미엄 모델로 전환 |
-| `/primary` | 메인 모델로 전환 |
-| `/reasoning` | 분석 모델로 전환 |
-| `/fast` | 빠른 모델로 전환 |
-| `/clear` | 대화 이력 초기화 |
-| `/info` | 현재 상태 확인 |
-| `quit` | 종료 |
-
----
-
-## API 서버 사용
-
-서버 실행 후 `http://127.0.0.1:8080/v1/chat/completions`에서 OpenAI 호환 API를 사용할 수 있습니다. Chatbox, Continue.dev, Open WebUI 등 모든 OpenAI API 호환 도구에서 연결 가능합니다.
+OpenAI 호환 서버:
 
 ```bash
-curl http://127.0.0.1:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"local","messages":[{"role":"user","content":"Hello!"}]}'
+./mlx_tq_server.sh mlx-community/Meta-Llama-3-8B-Instruct-4bit 8080
 ```
 
----
+## 설정 파일
 
-## 설정 변경
+설정은 `~/.config/turboquant_mlx/config.json`에 저장됩니다.
 
-`~/.config/turboquant/config.json`에서 모델, TurboQuant 비트, 서버 포트 등을 변경할 수 있습니다.
+주요 항목:
+- `default_model`
+- `bits`
+- `fp16_sink_size`
+- `host`
+- `port`
 
----
+## 이 경로를 쓸 때의 기대치
+
+좋은 점:
+- MLX 환경에서 TurboQuant 캐시 압축을 실험하기 쉽습니다.
+- 작은/중간급 모델에 붙여보기 편합니다.
+
+주의할 점:
+- 상류 프로젝트의 호환성 범위는 계속 변할 수 있습니다.
+- 이 저장소는 MLX 쪽을 실험용 경로로만 유지합니다.
+- 실사용의 1순위는 여전히 `llama.cpp + TurboQuant` 입니다.
 
 ## 참고 자료
 
-- [turboquant_mlx GitHub](https://github.com/helgklaizar/turboquant_mlx)
-- [Google Research Blog](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/)
-- [Qwen3.5-27B-Claude-Opus-Distilled (HuggingFace)](https://huggingface.co/mlx-community/Qwen3.5-27B-Claude-4.6-Opus-Distilled-MLX-4bit)
-- [turboquant.net](https://turboquant.net/)
+- [helgklaizar/turboquant_mlx](https://github.com/helgklaizar/turboquant_mlx)
+- [Google Research TurboQuant](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/)

@@ -1,7 +1,9 @@
 #!/bin/bash
 # =============================================================================
-# TurboQuant MLX — 환경 검증
+# Local LLM 설치 상태 점검
 # =============================================================================
+
+set -u
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -11,9 +13,12 @@ NC='\033[0m'
 
 PASS=0
 FAIL=0
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+RAM_BYTES="$(sysctl -n hw.memsize 2>/dev/null || echo 0)"
+RAM_GB=$((RAM_BYTES / 1073741824))
 
 check() {
-    if eval "$2" > /dev/null 2>&1; then
+    if eval "$2" >/dev/null 2>&1; then
         echo -e "${GREEN}  ✓ $1${NC}"
         PASS=$((PASS + 1))
     else
@@ -22,68 +27,61 @@ check() {
     fi
 }
 
+detect() {
+    if eval "$2" >/dev/null 2>&1; then
+        echo -e "${GREEN}  ✓ 감지됨: $1${NC}"
+    else
+        echo -e "${YELLOW}  - 없음: $1${NC}"
+    fi
+}
+
 echo ""
-echo -e "${CYAN}TurboQuant MLX — 환경 검증${NC}"
+echo -e "${CYAN}Local LLM 설치 상태 점검${NC}"
 echo "================================"
 
 echo ""
 echo "[시스템]"
-check "Apple Silicon (arm64)" "[ $(uname -m) = arm64 ]"
-RAM_GB=$(($(sysctl -n hw.memsize) / 1073741824))
-check "RAM ${RAM_GB}GB (최소 8GB)" "[ $RAM_GB -ge 8 ]"
-check "RAM ${RAM_GB}GB (권장 16GB+)" "[ $RAM_GB -ge 16 ]"
+check "Apple Silicon (arm64)" "[ \"$(uname -m)\" = arm64 ]"
+check "RAM ${RAM_GB}GB (최소 16GB 권장)" "[ $RAM_GB -ge 16 ]"
 
 echo ""
-echo "[Python 환경]"
-VENV="$HOME/.turboquant_mlx"
-check "가상환경 존재 ($VENV)" "[ -d $VENV ]"
-check "Python 실행 가능" "$VENV/bin/python3 --version"
+echo "[llama.cpp + TurboQuant]"
+detect "TurboQuant 포크 저장소" "[ -d \"$HOME/.llama-cpp-turboquant/.git\" ]"
+detect "llama-cli" "[ -x \"$HOME/.llama-cpp-turboquant/build/bin/llama-cli\" ]"
+detect "llama-server" "[ -x \"$HOME/.llama-cpp-turboquant/build/bin/llama-server\" ]"
+detect "tqp_chat.sh" "[ -x \"$SCRIPT_DIR/tqp_chat.sh\" ]"
+detect "tqp_server.sh" "[ -x \"$SCRIPT_DIR/tqp_server.sh\" ]"
 
 echo ""
-echo "[패키지]"
-check "mlx" "$VENV/bin/python3 -c 'import mlx; print(mlx.__version__)'"
-check "mlx_lm" "$VENV/bin/python3 -c 'import mlx_lm'"
-check "turboquant_mlx" "$VENV/bin/python3 -c 'import turboquant_mlx'"
-check "huggingface_hub" "$VENV/bin/python3 -c 'import huggingface_hub'"
+echo "[flash-moe]"
+detect "flash-moe 저장소" "[ -d \"$HOME/.flash-moe/.git\" ]"
+detect "flash-moe chat" "[ -x \"$HOME/.flash-moe/metal_infer/chat\" ]"
+detect "flash_chat.sh" "[ -x \"$SCRIPT_DIR/flash_chat.sh\" ]"
 
 echo ""
-echo "[설정]"
-CONFIG="$HOME/.config/turboquant/config.json"
-check "config.json 존재" "[ -f $CONFIG ]"
-if [ -f "$CONFIG" ]; then
-    check "config.json 유효" "$VENV/bin/python3 -c \"import json; c=json.load(open('$CONFIG')); print(c['models']['primary']['name'])\""
-
-    PRIMARY=$($VENV/bin/python3 -c "import json; print(json.load(open('$CONFIG'))['models']['primary']['id'])" 2>/dev/null)
-    if [ -n "$PRIMARY" ]; then
-        echo ""
-        echo "[모델 설정 확인]"
-        echo -e "  메인: $PRIMARY"
-        SECONDARY=$($VENV/bin/python3 -c "import json; print(json.load(open('$CONFIG'))['models']['reasoning']['id'])" 2>/dev/null)
-        echo -e "  분석: $SECONDARY"
-        FAST=$($VENV/bin/python3 -c "import json; print(json.load(open('$CONFIG'))['models']['fast']['id'])" 2>/dev/null)
-        echo -e "  빠른: $FAST"
-    fi
-fi
+echo "[TurboQuant MLX 실험 경로]"
+detect "MLX 가상환경" "[ -d \"$HOME/.turboquant_mlx\" ]"
+detect "mlx_tq_chat.sh" "[ -x \"$SCRIPT_DIR/mlx_tq_chat.sh\" ]"
+detect "turboquant_mlx import" "[ -x \"$HOME/.turboquant_mlx/bin/python3\" ] && $HOME/.turboquant_mlx/bin/python3 -c 'import turboquant_mlx'"
 
 echo ""
-echo "[실행 스크립트]"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-check "chat.sh" "[ -x $SCRIPT_DIR/chat.sh ]"
-check "server.sh" "[ -x $SCRIPT_DIR/server.sh ]"
-check "download_models.sh" "[ -x $SCRIPT_DIR/download_models.sh ]"
+echo "[공통 도구]"
+check "git" "command -v git"
+check "python3" "command -v python3"
+check "cmake" "command -v cmake"
 
 echo ""
 echo "================================"
 TOTAL=$((PASS + FAIL))
 if [ $FAIL -eq 0 ]; then
-    echo -e "${GREEN}결과: ${PASS}/${TOTAL} 모두 통과!${NC}"
-    echo ""
-    echo "다음 단계:"
-    echo "  1. ./download_models.sh  — 모델 다운로드"
-    echo "  2. ./chat.sh             — 대화 시작"
+    echo -e "${GREEN}결과: ${PASS}/${TOTAL} 필수 점검 통과${NC}"
 else
-    echo -e "${YELLOW}결과: ${PASS}/${TOTAL} 통과, ${FAIL}개 실패${NC}"
-    echo ""
-    echo "./setup_turboquant.sh 를 먼저 실행해주세요."
+    echo -e "${YELLOW}결과: ${PASS}/${TOTAL} 필수 점검 통과, ${FAIL}개 확인 필요${NC}"
 fi
+
+echo ""
+echo "권장 시작점:"
+echo "  1. ./setup_turboquant_plus.sh"
+echo "  2. 필요할 때만 ./setup_flash_moe.sh"
+echo "  3. 실험용으로 ./setup_turboquant.sh"
 echo ""

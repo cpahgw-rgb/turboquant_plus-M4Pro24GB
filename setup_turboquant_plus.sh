@@ -1,11 +1,10 @@
 #!/bin/bash
 # =============================================================================
-# turboquant_plus 셋업 — llama.cpp + TurboQuant Metal 커널
-# Qwen3.5-35B-A3B MoE + KV 캐시 4.9x 압축 + Sparse V
-# M4 Pro 48GB 최적화
+# llama.cpp + TurboQuant 포크 셋업
+# 실제 빌드 대상: TheTom/llama-cpp-turboquant (feature/turboquant-kv-cache)
 # =============================================================================
 
-set -e
+set -euo pipefail
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -15,278 +14,228 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+INSTALL_DIR="$HOME/.llama-cpp-turboquant"
+BUILD_DIR="$INSTALL_DIR/build"
+REPO_URL="https://github.com/TheTom/llama-cpp-turboquant.git"
+REPO_BRANCH="feature/turboquant-kv-cache"
+MODEL_REPO="bartowski/Qwen_Qwen3.5-35B-A3B-GGUF"
+MODEL_DIR="$HOME/models/qwen35-35b-a3b"
+CPU_COUNT="$(sysctl -n hw.ncpu 2>/dev/null || echo 8)"
+RAM_BYTES="$(sysctl -n hw.memsize 2>/dev/null || echo 0)"
+RAM_GB=$((RAM_BYTES / 1073741824))
+CHIP="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo 'Apple Silicon')"
+
+need_cmd() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo -e "${RED}$1 명령을 찾을 수 없습니다.${NC}"
+        exit 1
+    fi
+}
+
 echo -e "${CYAN}"
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  turboquant_plus — TurboQuant + llama.cpp + Metal          ║"
-echo "║  Qwen3.5-35B-A3B MoE | KV 4.9x 압축 | Sparse V           ║"
+echo "║  llama.cpp + TurboQuant (Metal)                            ║"
+echo "║  Qwen3.5-35B-A3B | turbo3/turbo4 KV cache                 ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
-# =============================================================================
-# 1. 시스템 확인
-# =============================================================================
 echo -e "${BLUE}[1/5] 시스템 확인...${NC}"
-
-ARCH=$(uname -m)
-if [ "$ARCH" != "arm64" ]; then
+if [ "$(uname -m)" != "arm64" ]; then
     echo -e "${RED}Apple Silicon 전용입니다.${NC}"
     exit 1
 fi
 
-TOTAL_RAM_GB=$(($(sysctl -n hw.memsize) / 1073741824))
-CHIP=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Apple Silicon")
+echo -e "${GREEN}  ✓ ${CHIP} / ${RAM_GB}GB${NC}"
+if [ "$RAM_GB" -lt 32 ]; then
+    echo -e "${YELLOW}  ⚠ 35B-A3B 실사용은 32GB 이상을 권장합니다.${NC}"
+fi
 
-echo -e "${GREEN}  ✓ $CHIP / ${TOTAL_RAM_GB}GB${NC}"
-
-# =============================================================================
-# 2. 빌드 도구 확인
-# =============================================================================
 echo ""
-echo -e "${BLUE}[2/5] 빌드 도구 확인...${NC}"
-
-if ! xcode-select -p &> /dev/null; then
-    echo -e "${YELLOW}  Xcode CLT 설치 필요...${NC}"
+echo -e "${BLUE}[2/5] 개발 도구 확인...${NC}"
+if ! xcode-select -p >/dev/null 2>&1; then
+    echo -e "${YELLOW}  Xcode Command Line Tools 설치가 필요합니다.${NC}"
     xcode-select --install
     echo -e "${YELLOW}  설치 완료 후 다시 실행해주세요.${NC}"
     exit 1
 fi
-echo -e "${GREEN}  ✓ Xcode Command Line Tools${NC}"
 
-if ! command -v cmake &> /dev/null; then
-    echo -e "${CYAN}  cmake 설치 중...${NC}"
-    if command -v brew &> /dev/null; then
+need_cmd git
+if ! command -v cmake >/dev/null 2>&1; then
+    if command -v brew >/dev/null 2>&1; then
+        echo -e "${CYAN}  cmake 설치 중...${NC}"
         brew install cmake
     else
-        echo -e "${RED}  Homebrew가 필요합니다. 먼저 설치해주세요.${NC}"
+        echo -e "${RED}cmake가 없고 Homebrew도 찾지 못했습니다.${NC}"
         exit 1
     fi
 fi
+
+echo -e "${GREEN}  ✓ git $(git --version | awk '{print $3}')${NC}"
 echo -e "${GREEN}  ✓ cmake $(cmake --version | head -1 | awk '{print $3}')${NC}"
 
-# =============================================================================
-# 3. turboquant_plus 클론 & 빌드
-# =============================================================================
 echo ""
-echo -e "${BLUE}[3/5] turboquant_plus 클론 & 빌드...${NC}"
-
-TQP_DIR="$HOME/.turboquant_plus"
-
-if [ -d "$TQP_DIR" ]; then
-    echo -e "${CYAN}  기존 설치 감지. 업데이트 중...${NC}"
-    cd "$TQP_DIR"
-    git pull -q 2>/dev/null || true
+echo -e "${BLUE}[3/5] llama.cpp TurboQuant 포크 준비...${NC}"
+if [ -d "$INSTALL_DIR/.git" ]; then
+    CURRENT_REMOTE="$(git -C "$INSTALL_DIR" remote get-url origin 2>/dev/null || true)"
+    if [ "$CURRENT_REMOTE" != "$REPO_URL" ]; then
+        echo -e "${RED}  $INSTALL_DIR 가 다른 저장소를 가리키고 있습니다.${NC}"
+        echo -e "${YELLOW}  origin: $CURRENT_REMOTE${NC}"
+        echo -e "${YELLOW}  기대값: $REPO_URL${NC}"
+        exit 1
+    fi
+    echo -e "${CYAN}  기존 설치 업데이트 중...${NC}"
+    git -C "$INSTALL_DIR" fetch origin --quiet
+    git -C "$INSTALL_DIR" checkout --quiet "$REPO_BRANCH"
+    git -C "$INSTALL_DIR" pull --ff-only --quiet origin "$REPO_BRANCH"
+elif [ -e "$INSTALL_DIR" ]; then
+    echo -e "${RED}  $INSTALL_DIR 가 이미 존재하지만 git 저장소가 아닙니다.${NC}"
+    exit 1
 else
-    echo -e "${CYAN}  소스 클론 중...${NC}"
-    git clone https://github.com/TheTom/turboquant_plus.git "$TQP_DIR"
+    echo -e "${CYAN}  포크 클론 중...${NC}"
+    git clone --branch "$REPO_BRANCH" --single-branch "$REPO_URL" "$INSTALL_DIR"
 fi
 
-cd "$TQP_DIR"
+echo -e "${CYAN}  Metal 빌드 중...${NC}"
+cmake -S "$INSTALL_DIR" -B "$BUILD_DIR" \
+    -DGGML_METAL=ON \
+    -DGGML_METAL_EMBED_LIBRARY=ON \
+    -DCMAKE_BUILD_TYPE=Release
+cmake --build "$BUILD_DIR" --config Release -j"$CPU_COUNT"
 
-echo -e "${CYAN}  빌드 중 (Metal 커널 포함)...${NC}"
-mkdir -p build && cd build
-cmake .. \
-    -DLLAMA_METAL=ON \
-    -DLLAMA_METAL_EMBED_LIBRARY=ON \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DLLAMA_TURBOQUANT=ON \
-    2>&1 | tail -3
-cmake --build . --config Release -j$(sysctl -n hw.ncpu) 2>&1 | tail -5
+if ! "$BUILD_DIR/bin/llama-server" --help 2>/dev/null | grep -q 'turbo3'; then
+    echo -e "${RED}  빌드는 끝났지만 turbo3/turbo4 옵션을 확인하지 못했습니다.${NC}"
+    exit 1
+fi
 
-echo -e "${GREEN}  ✓ 빌드 완료 (Metal + TurboQuant 커널)${NC}"
+echo -e "${GREEN}  ✓ 빌드 완료${NC}"
 
-# =============================================================================
-# 4. 모델 다운로드 안내
-# =============================================================================
 echo ""
-echo -e "${BLUE}[4/5] 모델 준비...${NC}"
+echo -e "${BLUE}[4/5] 모델 안내...${NC}"
+echo "  추천 모델 저장소: $MODEL_REPO"
+echo "  기본 경로: $MODEL_DIR"
+echo ""
+echo "  다운로드 예시:"
+echo "    pip install huggingface_hub"
+echo "    huggingface-cli download $MODEL_REPO \\"
+echo "      --include '*Q4_K_M*' \\"
+echo "      --local-dir $MODEL_DIR"
 
-echo -e "${CYAN}"
-echo "  추천 모델: Qwen3.5-35B-A3B (MoE, 토큰당 3B 활성화)"
-echo ""
-echo "  GGUF 모델 다운로드 방법:"
-echo ""
-echo -e "  ${YELLOW}# Homebrew로 huggingface-cli 설치 (이미 있으면 스킵)${NC}"
-echo -e "  ${YELLOW}pip install huggingface_hub${NC}"
-echo ""
-echo -e "  ${YELLOW}# GGUF 모델 다운로드 (turbo4 호환, ~20GB)${NC}"
-echo -e "  ${YELLOW}huggingface-cli download bartowski/Qwen3.5-35B-A3B-GGUF \\${NC}"
-echo -e "  ${YELLOW}  --include \"*Q4_K_M*\" \\${NC}"
-echo -e "  ${YELLOW}  --local-dir ~/models/qwen35-35b-a3b${NC}"
-echo ""
-echo -e "  ${YELLOW}# 대안: 더 작은 모델 (27B dense)${NC}"
-echo -e "  ${YELLOW}huggingface-cli download bartowski/Qwen3.5-27B-GGUF \\${NC}"
-echo -e "  ${YELLOW}  --include \"*Q4_K_M*\" \\${NC}"
-echo -e "  ${YELLOW}  --local-dir ~/models/qwen35-27b${NC}"
-echo -e "${NC}"
-
-# =============================================================================
-# 5. 실행 스크립트 생성
-# =============================================================================
 echo ""
 echo -e "${BLUE}[5/5] 실행 스크립트 생성...${NC}"
 
-SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
-BUILD_DIR="$TQP_DIR/build"
-
-# 대화형 채팅 (turbo4 KV 캐시)
-cat > "$SCRIPTS_DIR/tqp_chat.sh" << EOFCHAT
+cat > "$SCRIPT_DIR/tqp_chat.sh" <<EOFCHAT
 #!/bin/bash
-# turboquant_plus — TurboQuant KV 캐시 + 대화형 채팅
-# Qwen3.5-35B-A3B MoE | turbo4 KV (3.8x 압축) | Sparse V
-
+set -euo pipefail
 MODEL_DIR="\$HOME/models/qwen35-35b-a3b"
-MODEL_FILE=\$(find "\$MODEL_DIR" -name "*.gguf" -type f | head -1 2>/dev/null)
-
+MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*.gguf' | head -1 2>/dev/null)"
 if [ -z "\$MODEL_FILE" ]; then
-    echo "모델 파일을 찾을 수 없습니다."
-    echo "먼저 모델을 다운로드해주세요:"
-    echo "  huggingface-cli download bartowski/Qwen3.5-35B-A3B-GGUF --include '*Q4_K_M*' --local-dir ~/models/qwen35-35b-a3b"
+    echo "모델 파일을 찾지 못했습니다: \$MODEL_DIR"
+    echo "huggingface-cli download $MODEL_REPO --include '*Q4_K_M*' --local-dir \$MODEL_DIR"
     exit 1
 fi
-
-echo "모델: \$MODEL_FILE"
-echo "KV 캐시: turbo4 (4.25-bit, 3.8x 압축)"
-echo ""
-
-$BUILD_DIR/bin/llama-cli \\
-    -m "\$MODEL_FILE" \\
-    --cache-type-k turbo4 \\
-    --cache-type-v turbo4 \\
-    -ngl 99 \\
-    -c 65536 \\
-    --temp 0.7 \\
-    --top-p 0.9 \\
-    -i \\
-    -cnv
+exec "$BUILD_DIR/bin/llama-cli" \
+    -m "\$MODEL_FILE" \
+    --jinja \
+    --cache-type-k turbo4 \
+    --cache-type-v turbo4 \
+    -ngl 99 \
+    -c 65536 \
+    --temp 0.7 \
+    --top-p 0.9 \
+    -i \
+    -cnv \
+    "\$@"
 EOFCHAT
-chmod +x "$SCRIPTS_DIR/tqp_chat.sh"
+chmod +x "$SCRIPT_DIR/tqp_chat.sh"
 
-# turbo3 모드 (더 강한 압축, 4.9x)
-cat > "$SCRIPTS_DIR/tqp_chat_turbo3.sh" << EOFCHAT3
+cat > "$SCRIPT_DIR/tqp_chat_turbo3.sh" <<EOFCHAT3
 #!/bin/bash
-# turboquant_plus — turbo3 모드 (4.9x 압축, 최대 컨텍스트)
-
+set -euo pipefail
 MODEL_DIR="\$HOME/models/qwen35-35b-a3b"
-MODEL_FILE=\$(find "\$MODEL_DIR" -name "*.gguf" -type f | head -1 2>/dev/null)
-
+MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*.gguf' | head -1 2>/dev/null)"
 if [ -z "\$MODEL_FILE" ]; then
-    echo "모델을 먼저 다운로드해주세요. ./tqp_chat.sh 참고."
+    echo "모델 파일을 찾지 못했습니다: \$MODEL_DIR"
     exit 1
 fi
-
-echo "모델: \$MODEL_FILE"
-echo "KV 캐시: turbo3 (3.25-bit, 4.9x 압축) + Sparse V"
-echo ""
-
-$BUILD_DIR/bin/llama-cli \\
-    -m "\$MODEL_FILE" \\
-    --cache-type-k turbo3 \\
-    --cache-type-v turbo3 \\
-    -ngl 99 \\
-    -c 131072 \\
-    --temp 0.7 \\
-    --top-p 0.9 \\
-    -i \\
-    -cnv
+exec "$BUILD_DIR/bin/llama-cli" \
+    -m "\$MODEL_FILE" \
+    --jinja \
+    --cache-type-k turbo3 \
+    --cache-type-v turbo3 \
+    -ngl 99 \
+    -c 131072 \
+    --temp 0.7 \
+    --top-p 0.9 \
+    -i \
+    -cnv \
+    "\$@"
 EOFCHAT3
-chmod +x "$SCRIPTS_DIR/tqp_chat_turbo3.sh"
+chmod +x "$SCRIPT_DIR/tqp_chat_turbo3.sh"
 
-# OpenAI 호환 API 서버
-cat > "$SCRIPTS_DIR/tqp_server.sh" << EOFSRV
+cat > "$SCRIPT_DIR/tqp_server.sh" <<EOFSERVER
 #!/bin/bash
-# turboquant_plus — OpenAI 호환 API 서버
-
+set -euo pipefail
 MODEL_DIR="\$HOME/models/qwen35-35b-a3b"
-MODEL_FILE=\$(find "\$MODEL_DIR" -name "*.gguf" -type f | head -1 2>/dev/null)
-
+MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*.gguf' | head -1 2>/dev/null)"
+HOST="127.0.0.1"
+PORT="8080"
+if [ \$# -ge 1 ]; then HOST="\$1"; shift; fi
+if [ \$# -ge 1 ]; then PORT="\$1"; shift; fi
 if [ -z "\$MODEL_FILE" ]; then
-    echo "모델을 먼저 다운로드해주세요."
+    echo "모델 파일을 찾지 못했습니다: \$MODEL_DIR"
     exit 1
 fi
+exec "$BUILD_DIR/bin/llama-server" \
+    -m "\$MODEL_FILE" \
+    --jinja \
+    --alias qwen35-turbo \
+    --cache-type-k turbo4 \
+    --cache-type-v turbo4 \
+    -ngl 99 \
+    -c 65536 \
+    --host "\$HOST" \
+    --port "\$PORT" \
+    "\$@"
+EOFSERVER
+chmod +x "$SCRIPT_DIR/tqp_server.sh"
 
-HOST="\${1:-127.0.0.1}"
-PORT="\${2:-8080}"
-
-echo "모델: \$MODEL_FILE"
-echo "KV 캐시: turbo4 (3.8x 압축)"
-echo "엔드포인트: http://\$HOST:\$PORT/v1/chat/completions"
-echo ""
-
-$BUILD_DIR/bin/llama-server \\
-    -m "\$MODEL_FILE" \\
-    --cache-type-k turbo4 \\
-    --cache-type-v turbo4 \\
-    -ngl 99 \\
-    -c 65536 \\
-    --host "\$HOST" \\
-    --port "\$PORT"
-EOFSRV
-chmod +x "$SCRIPTS_DIR/tqp_server.sh"
-
-# 벤치마크
-cat > "$SCRIPTS_DIR/tqp_bench.sh" << EOFBENCH
+cat > "$SCRIPT_DIR/tqp_bench.sh" <<EOFBENCH
 #!/bin/bash
-# turboquant_plus — 성능 벤치마크 (turbo3 vs turbo4 vs q8_0)
-
+set -euo pipefail
 MODEL_DIR="\$HOME/models/qwen35-35b-a3b"
-MODEL_FILE=\$(find "\$MODEL_DIR" -name "*.gguf" -type f | head -1 2>/dev/null)
-
+MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*.gguf' | head -1 2>/dev/null)"
 if [ -z "\$MODEL_FILE" ]; then
-    echo "모델을 먼저 다운로드해주세요."
+    echo "모델 파일을 찾지 못했습니다: \$MODEL_DIR"
     exit 1
 fi
-
-echo "═══════════════════════════════════════"
-echo "  turboquant_plus 벤치마크"
-echo "  모델: \$MODEL_FILE"
-echo "═══════════════════════════════════════"
-
 for CACHE_TYPE in q8_0 turbo4 turbo3; do
     echo ""
-    echo "── KV 캐시: \$CACHE_TYPE ──"
-    $BUILD_DIR/bin/llama-bench \\
-        -m "\$MODEL_FILE" \\
-        --cache-type-k "\$CACHE_TYPE" \\
-        --cache-type-v "\$CACHE_TYPE" \\
-        -ngl 99 \\
-        -t $(sysctl -n hw.ncpu) \\
-        -p 512 -n 128 2>&1 | tail -5
-done
-
-echo ""
-echo "벤치마크 완료."
+    echo "=== \$CACHE_TYPE ==="
+    "$BUILD_DIR/bin/llama-bench" \
+        -m "\$MODEL_FILE" \
+        --cache-type-k "\$CACHE_TYPE" \
+        --cache-type-v "\$CACHE_TYPE" \
+        -ngl 99 \
+        -t "$CPU_COUNT" \
+        -p 512 \
+        -n 128
+ done
 EOFBENCH
-chmod +x "$SCRIPTS_DIR/tqp_bench.sh"
+chmod +x "$SCRIPT_DIR/tqp_bench.sh"
 
-echo -e "${GREEN}  ✓ tqp_chat.sh          — turbo4 대화 (3.8x 압축, 권장)${NC}"
-echo -e "${GREEN}  ✓ tqp_chat_turbo3.sh   — turbo3 대화 (4.9x 압축, 최대 컨텍스트)${NC}"
-echo -e "${GREEN}  ✓ tqp_server.sh        — OpenAI API 서버${NC}"
-echo -e "${GREEN}  ✓ tqp_bench.sh         — 벤치마크 (turbo3 vs turbo4 vs q8_0)${NC}"
+echo -e "${GREEN}  ✓ tqp_chat.sh${NC}"
+echo -e "${GREEN}  ✓ tqp_chat_turbo3.sh${NC}"
+echo -e "${GREEN}  ✓ tqp_server.sh${NC}"
+echo -e "${GREEN}  ✓ tqp_bench.sh${NC}"
 
-# =============================================================================
-# 완료
-# =============================================================================
 echo ""
-echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════╗"
-echo -e "║                  turboquant_plus 셋업 완료                     ║"
-echo -e "╠══════════════════════════════════════════════════════════════════╣${NC}"
+echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗"
+echo -e "║                 llama.cpp TurboQuant 준비 완료             ║"
+echo -e "╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "  ${BOLD}구성:${NC}"
-echo -e "  모델: Qwen3.5-35B-A3B MoE (35B, 토큰당 3B 활성화)"
-echo -e "  KV 캐시: TurboQuant turbo4 (3.8x) / turbo3 (4.9x)"
-echo -e "  최적화: Sparse V (+22.8%), 4-mag LUT (+38%, M4 자동감지)"
-echo -e "  예상 속도: ~30-40 tok/s (M4 Pro 48GB)"
-echo ""
-echo -e "  ${BOLD}다음 단계:${NC}"
-echo -e "  1. 모델 다운로드 (~20GB):"
-echo -e "     ${YELLOW}pip install huggingface_hub${NC}"
-echo -e "     ${YELLOW}huggingface-cli download bartowski/Qwen3.5-35B-A3B-GGUF \\${NC}"
-echo -e "     ${YELLOW}  --include '*Q4_K_M*' --local-dir ~/models/qwen35-35b-a3b${NC}"
-echo ""
-echo -e "  2. 실행:"
-echo -e "     ${YELLOW}./tqp_chat.sh${NC}         — 대화 시작"
-echo -e "     ${YELLOW}./tqp_server.sh${NC}       — API 서버"
-echo -e "     ${YELLOW}./tqp_bench.sh${NC}        — 벤치마크"
-echo ""
-echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════╝${NC}"
-echo ""
+echo "설치 경로: $INSTALL_DIR"
+echo "다음 단계:"
+echo "  1. huggingface-cli download $MODEL_REPO --include '*Q4_K_M*' --local-dir $MODEL_DIR"
+echo "  2. ./tqp_chat.sh"
+echo "  3. ./tqp_server.sh"

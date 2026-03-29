@@ -1,133 +1,128 @@
-# flash-moe × TurboQuant 융합 분석 (업데이트)
+# TurboQuant / flash-moe 재검토 메모
 
-## 이미 누군가 했다
+## 결론 요약
 
-검색 결과, **직접적인 flash-moe + TurboQuant 결합체**는 없지만, 거의 동일한 효과를 내는 프로젝트 **2개**가 이미 존재합니다.
+이번 재검토의 핵심은 아래 네 줄로 요약됩니다.
 
----
+- TurboQuant는 주로 KV 캐시 문제를 다룹니다.
+- flash-moe는 거대 MoE 가중치를 SSD에서 스트리밍하는 문제를 다룹니다.
+- 두 기술은 서로 경쟁한다기보다 다른 병목을 겨냥합니다.
+- 하지만 현재 공개된 자료만 보면, 두 기술이 이미 하나의 통합 엔진으로 묶여 있다고 보기는 어렵습니다.
 
-## 발견 1: turboquant_plus (★ 핵심 발견)
+## 확인된 사실
 
-> [github.com/TheTom/turboquant_plus](https://github.com/TheTom/turboquant_plus)
+### 1. `TheTom/turboquant_plus`는 연구 저장소다
 
-**llama.cpp 포크에 TurboQuant Metal 커널을 직접 구현한 프로젝트.**
+`TheTom/turboquant_plus`는 Python 프로토타입, 벤치마크, 논문 확장 아이디어를 포함하는 저장소입니다.
 
-| 항목 | 내용 |
-|---|---|
-| 기반 | llama.cpp + 커스텀 Metal 셰이더 |
-| KV 캐시 압축 | turbo3 (3.25bit, 4.9x) / turbo4 (4.25bit, 3.8x) |
-| MoE 지원 | **Qwen3.5-35B-A3B (MoE)에서 검증됨** |
-| Apple Silicon | M1~M5 전체 지원, M4 전용 최적화(4-mag LUT, +38%) |
-| 추가 최적화 | **Sparse V** — 어텐션 가중치가 낮은 V 역양자화 스킵 (+22.8% 속도) |
-| 테스트 | 141개 유닛테스트, NIAH 9/9 통과 |
-| 상태 | **프로덕션 레디** |
+README도 설치를 두 층으로 분리합니다.
 
-### 왜 이게 중요한가 (M4 Pro 48GB 기준)
+- Python 프로토타입 설치
+- 별도 `llama.cpp` 포크 빌드
 
-Qwen3.5-35B-A3B 모델 = 35B 파라미터, 토큰당 **3B만 활성화**하는 MoE 구조.
+즉, 이 저장소 자체를 바로 `cmake`로 빌드하는 방식은 자연스럽지 않습니다.
 
-```
-모델 크기 (4-bit): ~20GB → 48GB RAM에 완전히 적재
-활성 파라미터:      3B / 토큰 → 매우 빠른 추론
-KV 캐시:           turbo3 = 4.9x 압축 → 128K+ 컨텍스트 가능
-M4 최적화:         4-mag LUT 자동 감지 → +38% 디코드 속도
-Sparse V:          +22.8% 추가 속도 (32K 컨텍스트)
-```
+### 2. 실제 `llama.cpp` 빌드는 별도 포크에서 한다
 
-**SSD 스트리밍이 필요 없다.** 35B 모델이 RAM에 통째로 들어가기 때문에 flash-moe의 디스크 오프로딩 없이도 전체가 작동합니다.
+TurboQuant KV 캐시가 들어간 실제 실행 경로는 `TheTom/llama-cpp-turboquant`의 `feature/turboquant-kv-cache` 브랜치입니다.
 
-### 성능 비교
+이 포크는 `llama-cli`, `llama-server`, `ggml`, `CMakeLists.txt`를 포함하는 정식 `llama.cpp` 계열 구조를 갖고 있습니다.
 
-| 구성 | 속도 | 품질 | 컨텍스트 |
-|---|---|---|---|
-| flash-moe 397B (4-bit, SSD) | ~4.4 tok/s | GPT-4급 | ~128K (KV 제한) |
-| **turboquant_plus 35B-A3B (turbo4)** | **~47 tok/s** | **우수** | **128K+ (turbo 압축)** |
-| turboquant_plus 35B-A3B (turbo3) | ~57 tok/s (Sparse V) | 우수 | 128K+ |
-| MLX 27B (TurboQuant 3-bit) | 15-22 tok/s | 우수 | 128K+ |
+그래서 `Qwen3.5-35B-A3B + TurboQuant KV 캐시`를 로컬에서 실행하려면 이 경로가 가장 직접적입니다.
 
-*참고: 47-57 tok/s는 M5 Max 128GB 벤치마크. M4 Pro 48GB에서는 30-40 tok/s 수준으로 예상.*
+### 3. flash-moe는 다른 문제를 푼다
 
----
+`flash-moe`는 `Qwen3.5-397B-A17B`를 48GB급 Mac에서 돌리기 위해, 전문가 레이어를 SSD에서 필요할 때마다 읽어오는 커스텀 C/Metal 엔진입니다.
 
-## 발견 2: Anemll/flash-moe (포크)
+즉, focus는 아래와 같습니다.
 
-> [github.com/Anemll/flash-moe](https://github.com/Anemll/flash-moe)
+- TurboQuant: 긴 대화에서 커지는 KV 캐시 압축
+- flash-moe: RAM에 다 안 들어가는 초대형 모델의 가중치 스트리밍
 
-**원본 flash-moe의 강화 포크.**
+### 4. `35B-A3B`와 `397B-A17B`는 운영 감각이 완전히 다르다
 
-| 항목 | 내용 |
-|---|---|
-| 타겟 | M5 Max 128GB (원본은 M3 Max 48GB) |
-| 전문가 양자화 | Unsloth Q3 GGUF (IQ3_XXS/IQ4_XS 혼합 정밀도) |
-| 성능 | 12.9 tok/s (원본 4.4 tok/s 대비 3x) |
-| 특징 | Metal 4 NAX, page-aligned pread, 하이브리드 MLX+GGUF |
-| TurboQuant | **미적용** — 전문가 양자화 개선에 집중 |
+`Qwen3.5-35B-A3B`는 GGUF + llama.cpp 포크 조합으로 현실적인 실사용 후보입니다.
 
-이 포크는 TurboQuant KV 압축이 아닌 **전문가 레이어 양자화 개선**에 초점을 맞춘 프로젝트입니다.
+반면 `Qwen3.5-397B-A17B`는
+- 전용 엔진이 필요하고
+- 디스크 사용량이 매우 크고
+- 속도도 훨씬 느립니다.
 
----
+그래서 둘을 같은 "권장 경로"로 묶기보다, 서로 다른 운영 모드로 보는 편이 맞습니다.
 
-## 최종 추천: M4 Pro 48GB 최적 구성
+## 확인되지 않은 것
 
-### ★ 1순위: turboquant_plus + Qwen3.5-35B-A3B
+### 1. 공개된 완성형 `flash-moe + TurboQuant` 통합 구현
 
-```
-왜: RAM에 완전 적재 + TurboQuant KV 압축 + MoE 검증완료
-속도: ~30-40 tok/s (M4 Pro 예상)
-품질: 35B급 (3B 활성) — 매우 우수
-컨텍스트: 128K+ (turbo3/4 압축)
-설치: llama.cpp 빌드 → 모델 다운 → 실행
-```
+현재 확인한 범위에서는,
+- flash-moe 쪽에 TurboQuant KV 압축이 직접 들어갔다는 1차 자료
+- TurboQuant 포크 쪽에 flash-moe식 SSD expert streaming이 들어갔다는 1차 자료
+를 찾지 못했습니다.
 
-### 2순위: flash-moe + 397B (프리미엄)
+그래서 "이미 누군가 둘을 합쳤다"고 단정하기는 어렵습니다.
 
-```
-왜: 최고 품질 (397B 전체 파라미터)
-속도: ~4-5 tok/s (SSD 스트리밍)
-품질: GPT-4급
-조건: SSD 210GB 여유 공간
-```
+### 2. `MLX + TurboQuant + 397B on 48GB`를 기본 경로로 제시할 근거
 
-### 3순위: MLX + 27B Claude Opus Distilled
+기존 스크립트는 MLX 쪽에서 `Qwen3.5-397B-A17B`를 바로 다루는 것처럼 구성돼 있었지만, 재검토 결과 이건 과감한 가정에 가까웠습니다.
 
-```
-왜: 가장 쉬운 셋업, Python 생태계
-속도: 15-22 tok/s
-품질: Claude Opus 증류 — 우수
-```
+상류 `turboquant_mlx`는 실험 구현으로 보는 편이 맞고, 대형 모델 호환성과 실제 메모리 조건은 계속 변할 수 있습니다.
 
----
+따라서 이 저장소에서는 MLX 경로를 기본 주력 경로에서 내렸습니다.
 
-## 두 기술의 본질적 차이 (쉬운 설명)
+## 실전 판단
 
-```
-┌─────────────────────────────────────────────────────┐
-│                  당신의 Mac (48GB)                    │
-│                                                     │
-│  ┌─────────────┐                                    │
-│  │ 모델 가중치  │ ← flash-moe가 해결 (SSD→RAM 스트리밍)│
-│  │  (209GB)    │    turboquant_plus는 필요없음       │
-│  └─────────────┘    (35B 모델은 RAM에 들어감)         │
-│                                                     │
-│  ┌─────────────┐                                    │
-│  │ KV 캐시     │ ← TurboQuant가 해결 (16bit→3bit)   │
-│  │ (대화 이력)  │    flash-moe에는 없는 기능          │
-│  └─────────────┘                                    │
-│                                                     │
-│  turboquant_plus = 두 번째 문제를 llama.cpp에서 해결  │
-│  flash-moe      = 첫 번째 문제를 C/Metal로 해결       │
-│                                                     │
-│  ★ 35B MoE는 RAM에 들어가므로,                       │
-│    turboquant_plus 하나로 두 문제 모두 해결!           │
-└─────────────────────────────────────────────────────┘
-```
+### 1순위: `llama.cpp + TurboQuant`
 
----
+추천 대상:
+- 48GB Mac에서 실제로 가장 먼저 돌려볼 경로가 필요할 때
+- 긴 컨텍스트와 실사용 속도의 균형이 중요할 때
 
-## 참고 자료
+왜:
+- 저장소 구조가 명확하고
+- OpenAI 호환 서버까지 바로 연결되며
+- `Qwen3.5-35B-A3B`와 조합이 자연스럽습니다.
 
-- [turboquant_plus](https://github.com/TheTom/turboquant_plus) — llama.cpp + TurboQuant Metal 커널
-- [Tom Turney 트윗 (구현 발표)](https://x.com/no_stp_on_snek/status/2036792058854121601)
-- [Anemll/flash-moe](https://github.com/Anemll/flash-moe) — flash-moe 강화 포크
-- [flash-moe 원본](https://github.com/danveloper/flash-moe)
-- [turboquant_plus Sparse V 문서](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/sparse-v-dequant.md)
+### 2순위: `flash-moe`
+
+추천 대상:
+- "어쨌든 397B를 내 맥에서 돌려보고 싶다"가 목표일 때
+
+왜:
+- 이 문제를 정면으로 푸는 전용 엔진이기 때문입니다.
+
+주의:
+- 준비 비용이 큽니다.
+- 일반적인 데일리 로컬 LLM 경로로 보기엔 무겁습니다.
+
+### 실험용: `turboquant_mlx`
+
+추천 대상:
+- MLX 생태계에서 TurboQuant 캐시 압축을 실험해보고 싶을 때
+
+왜:
+- 상류 구현을 빠르게 체험하기 좋기 때문입니다.
+
+주의:
+- 이 저장소에서는 더 이상 주력 경로로 취급하지 않습니다.
+
+## 이 저장소에서 반영한 정리
+
+이번 수정에서는 아래 방향으로 정리했습니다.
+
+- `setup_turboquant_plus.sh`
+  연구 저장소가 아니라 `llama-cpp-turboquant` 포크를 빌드하도록 수정
+- `setup_flash_moe.sh`
+  경로 계산과 안내 문구를 정리
+- `setup_turboquant.sh`
+  과장된 397B MLX 경로를 제거하고, 실험용 설치 도우미로 축소
+- `README.md`
+  주력 경로 2개 중심으로 재작성
+
+## 최종 한 줄
+
+이 프로젝트의 현실적인 축은 아래 두 개입니다.
+
+- 실사용: `llama.cpp + TurboQuant + Qwen3.5-35B-A3B`
+- 대형 실험: `flash-moe + Qwen3.5-397B-A17B`
+
+그 사이를 한 번에 이어붙이는 "만능 통합 경로"는 아직 공개 자료 기준으로는 확인되지 않았습니다.
