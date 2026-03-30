@@ -35,16 +35,165 @@ chmod +x setup_turboquant_plus.sh
 - 긴 컨텍스트에서 KV 캐시 압축 이득을 바로 체감하고 싶을 때
 
 생성되는 실행기:
-- `./tqp_chat.sh`
-- `./tqp_chat_turbo3.sh`
-- `./tqp_server.sh`
-- `./tqp_bench.sh`
+- `./turboquant_chat.sh`
+- `./turboquant_chat_turbo3.sh`
+- `./turboquant_chat_long.sh`
+- `./turboquant_server.sh`
+- `./turboquant_bench.sh`
+
+기존 `./tqp_*` 파일도 남아 있지만, 이제는 호환용 래퍼입니다. 새 이름 기준으로 사용하는 편이 더 직관적입니다.
 
 기본 설치 위치:
 - `~/.llama-cpp-turboquant`
 
 추천 모델:
 - `bartowski/Qwen_Qwen3.5-35B-A3B-GGUF`
+
+### TurboQuant 런처 사용법
+
+세 채팅 런처의 차이는 "모델"이 아니라 "KV cache 포맷"과 "기본 컨텍스트 길이"입니다.
+
+| 실행기 | KV cache | 기본 컨텍스트 | 추천 사용처 |
+|---|---|---|---|
+| `./turboquant_chat.sh` | `turbo4` | `32768` | 기본 추천. 평소 대화와 일반적인 작업 |
+| `./turboquant_chat_turbo3.sh` | `turbo3` | `65536` | `turbo3`와 `turbo4`를 비교하고 싶을 때 |
+| `./turboquant_chat_long.sh` | `turbo4` | `65536` | `turbo4`를 유지한 채 더 긴 문맥이 필요할 때 |
+
+빠르게 고르면:
+- 평소에는 `./turboquant_chat.sh`
+- 긴 문맥이 먼저 필요하면 `./turboquant_chat_long.sh`
+- `turbo3` 실험은 `./turboquant_chat_turbo3.sh`
+
+예시:
+
+```bash
+./turboquant_chat.sh
+```
+
+긴 문맥으로 실행:
+
+```bash
+TQP_CTX_SIZE=65536 ./turboquant_chat_long.sh
+```
+
+포트와 호스트를 바꿔 서버 실행:
+
+```bash
+./turboquant_server.sh 0.0.0.0 8080
+```
+
+환경변수로 덮어쓸 수 있는 주요 설정:
+- `TQP_CTX_SIZE`
+- `TQP_GPU_LAYERS`
+- `TQP_TEMP`
+- `TQP_TOP_P`
+- `TQP_HOST`
+- `TQP_PORT`
+
+### TurboQuant 파일 설명
+
+아래 파일들은 이름이 비슷해서 헷갈릴 수 있지만, 역할이 서로 다릅니다.
+
+| 파일 | 역할 | 언제 쓰는지 |
+|---|---|---|
+| `./turboquant_chat.sh` | 기본 채팅 런처 | 평소 대화와 일반 작업 |
+| `./turboquant_chat_turbo3.sh` | `turbo3` 비교용 채팅 런처 | `turbo3`와 `turbo4` 차이를 직접 보고 싶을 때 |
+| `./turboquant_chat_long.sh` | 긴 문맥용 채팅 런처 | `turbo4` 기준으로 컨텍스트를 더 길게 쓰고 싶을 때 |
+| `./turboquant_server.sh` | OpenAI 호환 서버 런처 | 다른 앱이나 스크립트에서 HTTP API로 붙이고 싶을 때 |
+| `./turboquant_bench.sh` | 간단 벤치마크 런처 | `q8_0`, `turbo4`, `turbo3` 속도를 비교할 때 |
+| `./turboquant_common.sh` | 공통 설정 파일 | 직접 실행하는 용도가 아니라, 다른 런처들이 공통으로 불러 쓰는 파일 |
+
+#### `turboquant_server.sh`
+
+이 파일은 대화형 채팅이 아니라 서버 실행용입니다.
+
+이럴 때 씁니다:
+- 로컬 앱에서 OpenAI 호환 엔드포인트로 붙이고 싶을 때
+- 브라우저 UI, 자동화 스크립트, 다른 툴에서 HTTP 호출을 하고 싶을 때
+- 매번 채팅 셸을 열지 않고 백그라운드 서버처럼 두고 싶을 때
+
+기본값:
+- 호스트: `127.0.0.1`
+- 포트: `8080`
+- KV cache: `turbo4`
+- 기본 컨텍스트: `32768`
+
+예시:
+
+```bash
+./turboquant_server.sh
+```
+
+외부 기기에서도 접근 가능하게 열기:
+
+```bash
+./turboquant_server.sh 0.0.0.0 8080
+```
+
+환경변수로도 조정할 수 있습니다:
+
+```bash
+TQP_CTX_SIZE=65536 TQP_PORT=8081 ./turboquant_server.sh
+```
+
+#### `turboquant_bench.sh`
+
+이 파일은 실제 채팅용이 아니라 비교 측정용입니다.
+
+무엇을 하냐면:
+- 같은 모델에 대해
+- `q8_0`
+- `turbo4`
+- `turbo3`
+순서로 `llama-bench`를 돌려서 출력 속도를 비교합니다.
+
+이럴 때 씁니다:
+- 지금 Mac에서 어떤 KV cache 설정이 더 빠른지 보고 싶을 때
+- `turbo3`와 `turbo4` 중 무엇을 기본값으로 둘지 판단할 때
+- 추후 설정을 바꾼 뒤 전후 비교를 남기고 싶을 때
+
+예시:
+
+```bash
+./turboquant_bench.sh
+```
+
+토큰 수를 줄여 빠르게 비교:
+
+```bash
+TQP_BENCH_PROMPT_TOKENS=256 TQP_BENCH_GEN_TOKENS=64 ./turboquant_bench.sh
+```
+
+#### `turboquant_common.sh`
+
+이 파일은 직접 실행하는 런처가 아닙니다.
+
+역할:
+- 모델 파일 찾기
+- 빌드된 `llama-cli`, `llama-server`, `llama-bench` 경로 공유
+- 기본 환경변수 값 관리
+- 공통 오류 메시지 처리
+
+즉, `turboquant_chat.sh`, `turboquant_server.sh`, `turboquant_bench.sh`가 중복 코드를 각자 갖지 않도록 묶어둔 내부 파일입니다.
+
+보통은 이 파일을 직접 실행하지 않습니다.
+
+#### 호환용 `tqp_*`
+
+기존 이름인 아래 파일들은 남아 있습니다.
+
+- `./tqp_chat.sh`
+- `./tqp_chat_turbo3.sh`
+- `./tqp_server.sh`
+- `./tqp_bench.sh`
+
+이 파일들은 이제 예전 명령이 안 깨지도록 `turboquant_*` 파일을 호출해주는 호환용 래퍼입니다.
+
+즉:
+- 새로 쓸 때는 `turboquant_*`
+- 예전 습관이나 기존 메모를 살릴 때는 `tqp_*`
+
+이렇게 이해하면 됩니다.
 
 ### 2. `setup_flash_moe.sh` — 397B 전용 경로
 
