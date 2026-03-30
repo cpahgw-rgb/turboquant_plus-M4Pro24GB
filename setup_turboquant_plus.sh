@@ -118,117 +118,240 @@ echo "  기본 경로: $MODEL_DIR"
 echo ""
 echo "  다운로드 예시:"
 echo "    pip install huggingface_hub"
-echo "    huggingface-cli download $MODEL_REPO \\"
-echo "      --include '$MODEL_GLOB' \\"
+echo "    huggingface-cli download $MODEL_REPO \\" 
+echo "      --include '$MODEL_GLOB' \\" 
 echo "      --local-dir $MODEL_DIR"
 
 echo ""
 echo -e "${BLUE}[5/5] 실행 스크립트 생성...${NC}"
 
-cat > "$SCRIPT_DIR/tqp_chat.sh" <<EOFCHAT
+cat > "$SCRIPT_DIR/turboquant_common.sh" <<'EOFCOMMON'
 #!/bin/bash
 set -euo pipefail
-MODEL_DIR="\$HOME/models/qwen35-35b-a3b"
-MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*Q6_K*.gguf' | head -1 2>/dev/null)"
-if [ -z "\$MODEL_FILE" ]; then
-    echo "모델 파일을 찾지 못했습니다: \$MODEL_DIR"
-    echo "huggingface-cli download $MODEL_REPO --include '$MODEL_GLOB' --local-dir \$MODEL_DIR"
-    exit 1
-fi
-exec "$BUILD_DIR/bin/llama-cli" \
-    -m "\$MODEL_FILE" \
+
+TQP_BUILD_DIR="${TQP_BUILD_DIR:-$HOME/.llama-cpp-turboquant/build}"
+TQP_MODEL_DIR="${TQP_MODEL_DIR:-$HOME/models/qwen35-35b-a3b}"
+TQP_MODEL_GLOB="${TQP_MODEL_GLOB:-*Q6_K*.gguf}"
+TQP_DEFAULT_GPU_LAYERS="${TQP_DEFAULT_GPU_LAYERS:-99}"
+TQP_DEFAULT_TEMP="${TQP_DEFAULT_TEMP:-0.7}"
+TQP_DEFAULT_TOP_P="${TQP_DEFAULT_TOP_P:-0.9}"
+TQP_DEFAULT_HOST="${TQP_DEFAULT_HOST:-127.0.0.1}"
+TQP_DEFAULT_PORT="${TQP_DEFAULT_PORT:-8080}"
+
+tqp_find_model() {
+    local model_file
+
+    model_file="$(find "$TQP_MODEL_DIR" -type f -name "$TQP_MODEL_GLOB" 2>/dev/null | sort | head -1)"
+
+    if [ -z "$model_file" ]; then
+        echo "모델 파일을 찾지 못했습니다: $TQP_MODEL_DIR"
+        echo "현재 패턴: $TQP_MODEL_GLOB"
+        exit 1
+    fi
+
+    printf '%s\n' "$model_file"
+}
+
+tqp_require_binary() {
+    local binary_path="$1"
+
+    if [ ! -x "$binary_path" ]; then
+        echo "실행 파일을 찾지 못했습니다: $binary_path"
+        echo "먼저 ./setup_turboquant_plus.sh 를 다시 실행해 주세요."
+        exit 1
+    fi
+}
+EOFCOMMON
+chmod +x "$SCRIPT_DIR/turboquant_common.sh"
+
+cat > "$SCRIPT_DIR/turboquant_chat.sh" <<'EOFCHAT'
+#!/bin/bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/turboquant_common.sh"
+
+MODEL_FILE="$(tqp_find_model)"
+LLAMA_CLI="$TQP_BUILD_DIR/bin/llama-cli"
+CTX_SIZE="${TQP_CTX_SIZE:-32768}"
+GPU_LAYERS="${TQP_GPU_LAYERS:-$TQP_DEFAULT_GPU_LAYERS}"
+TEMP="${TQP_TEMP:-$TQP_DEFAULT_TEMP}"
+TOP_P="${TQP_TOP_P:-$TQP_DEFAULT_TOP_P}"
+
+tqp_require_binary "$LLAMA_CLI"
+
+exec "$LLAMA_CLI" \
+    -m "$MODEL_FILE" \
     --jinja \
     --cache-type-k turbo4 \
     --cache-type-v turbo4 \
-    -ngl 99 \
-    -c 65536 \
-    --temp 0.7 \
-    --top-p 0.9 \
-    -i \
+    -ngl "$GPU_LAYERS" \
+    -c "$CTX_SIZE" \
+    --temp "$TEMP" \
+    --top-p "$TOP_P" \
     -cnv \
-    "\$@"
+    "$@"
 EOFCHAT
-chmod +x "$SCRIPT_DIR/tqp_chat.sh"
+chmod +x "$SCRIPT_DIR/turboquant_chat.sh"
 
-cat > "$SCRIPT_DIR/tqp_chat_turbo3.sh" <<EOFCHAT3
+cat > "$SCRIPT_DIR/turboquant_chat_turbo3.sh" <<'EOFCHAT3'
 #!/bin/bash
 set -euo pipefail
-MODEL_DIR="\$HOME/models/qwen35-35b-a3b"
-MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*Q6_K*.gguf' | head -1 2>/dev/null)"
-if [ -z "\$MODEL_FILE" ]; then
-    echo "모델 파일을 찾지 못했습니다: \$MODEL_DIR"
-    exit 1
-fi
-exec "$BUILD_DIR/bin/llama-cli" \
-    -m "\$MODEL_FILE" \
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/turboquant_common.sh"
+
+MODEL_FILE="$(tqp_find_model)"
+LLAMA_CLI="$TQP_BUILD_DIR/bin/llama-cli"
+CTX_SIZE="${TQP_CTX_SIZE:-65536}"
+GPU_LAYERS="${TQP_GPU_LAYERS:-$TQP_DEFAULT_GPU_LAYERS}"
+TEMP="${TQP_TEMP:-$TQP_DEFAULT_TEMP}"
+TOP_P="${TQP_TOP_P:-$TQP_DEFAULT_TOP_P}"
+
+tqp_require_binary "$LLAMA_CLI"
+
+exec "$LLAMA_CLI" \
+    -m "$MODEL_FILE" \
     --jinja \
     --cache-type-k turbo3 \
     --cache-type-v turbo3 \
-    -ngl 99 \
-    -c 131072 \
-    --temp 0.7 \
-    --top-p 0.9 \
-    -i \
+    -ngl "$GPU_LAYERS" \
+    -c "$CTX_SIZE" \
+    --temp "$TEMP" \
+    --top-p "$TOP_P" \
     -cnv \
-    "\$@"
+    "$@"
 EOFCHAT3
-chmod +x "$SCRIPT_DIR/tqp_chat_turbo3.sh"
+chmod +x "$SCRIPT_DIR/turboquant_chat_turbo3.sh"
 
-cat > "$SCRIPT_DIR/tqp_server.sh" <<EOFSERVER
+cat > "$SCRIPT_DIR/turboquant_chat_long.sh" <<'EOFCHATLONG'
 #!/bin/bash
 set -euo pipefail
-MODEL_DIR="\$HOME/models/qwen35-35b-a3b"
-MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*Q6_K*.gguf' | head -1 2>/dev/null)"
-HOST="127.0.0.1"
-PORT="8080"
-if [ \$# -ge 1 ]; then HOST="\$1"; shift; fi
-if [ \$# -ge 1 ]; then PORT="\$1"; shift; fi
-if [ -z "\$MODEL_FILE" ]; then
-    echo "모델 파일을 찾지 못했습니다: \$MODEL_DIR"
-    exit 1
-fi
-exec "$BUILD_DIR/bin/llama-server" \
-    -m "\$MODEL_FILE" \
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/turboquant_common.sh"
+
+MODEL_FILE="$(tqp_find_model)"
+LLAMA_CLI="$TQP_BUILD_DIR/bin/llama-cli"
+CTX_SIZE="${TQP_CTX_SIZE:-65536}"
+GPU_LAYERS="${TQP_GPU_LAYERS:-$TQP_DEFAULT_GPU_LAYERS}"
+TEMP="${TQP_TEMP:-$TQP_DEFAULT_TEMP}"
+TOP_P="${TQP_TOP_P:-$TQP_DEFAULT_TOP_P}"
+
+tqp_require_binary "$LLAMA_CLI"
+
+exec "$LLAMA_CLI" \
+    -m "$MODEL_FILE" \
+    --jinja \
+    --cache-type-k turbo4 \
+    --cache-type-v turbo4 \
+    -ngl "$GPU_LAYERS" \
+    -c "$CTX_SIZE" \
+    --temp "$TEMP" \
+    --top-p "$TOP_P" \
+    -cnv \
+    "$@"
+EOFCHATLONG
+chmod +x "$SCRIPT_DIR/turboquant_chat_long.sh"
+
+cat > "$SCRIPT_DIR/turboquant_server.sh" <<'EOFSERVER'
+#!/bin/bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/turboquant_common.sh"
+
+MODEL_FILE="$(tqp_find_model)"
+LLAMA_SERVER="$TQP_BUILD_DIR/bin/llama-server"
+HOST="${TQP_HOST:-$TQP_DEFAULT_HOST}"
+PORT="${TQP_PORT:-$TQP_DEFAULT_PORT}"
+CTX_SIZE="${TQP_CTX_SIZE:-32768}"
+GPU_LAYERS="${TQP_GPU_LAYERS:-$TQP_DEFAULT_GPU_LAYERS}"
+
+if [ $# -ge 1 ]; then HOST="$1"; shift; fi
+if [ $# -ge 1 ]; then PORT="$1"; shift; fi
+
+tqp_require_binary "$LLAMA_SERVER"
+
+exec "$LLAMA_SERVER" \
+    -m "$MODEL_FILE" \
     --jinja \
     --alias qwen35-turbo \
     --cache-type-k turbo4 \
     --cache-type-v turbo4 \
-    -ngl 99 \
-    -c 65536 \
-    --host "\$HOST" \
-    --port "\$PORT" \
-    "\$@"
+    -ngl "$GPU_LAYERS" \
+    -c "$CTX_SIZE" \
+    --host "$HOST" \
+    --port "$PORT" \
+    "$@"
 EOFSERVER
-chmod +x "$SCRIPT_DIR/tqp_server.sh"
+chmod +x "$SCRIPT_DIR/turboquant_server.sh"
 
-cat > "$SCRIPT_DIR/tqp_bench.sh" <<EOFBENCH
+cat > "$SCRIPT_DIR/turboquant_bench.sh" <<'EOFBENCH'
 #!/bin/bash
 set -euo pipefail
-MODEL_DIR="\$HOME/models/qwen35-35b-a3b"
-MODEL_FILE="\$(find "\$MODEL_DIR" -type f -name '*Q6_K*.gguf' | head -1 2>/dev/null)"
-if [ -z "\$MODEL_FILE" ]; then
-    echo "모델 파일을 찾지 못했습니다: \$MODEL_DIR"
-    exit 1
-fi
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/turboquant_common.sh"
+
+MODEL_FILE="$(tqp_find_model)"
+LLAMA_BENCH="$TQP_BUILD_DIR/bin/llama-bench"
+GPU_LAYERS="${TQP_GPU_LAYERS:-$TQP_DEFAULT_GPU_LAYERS}"
+THREADS="${TQP_THREADS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 8)}"
+PROMPT_TOKENS="${TQP_BENCH_PROMPT_TOKENS:-512}"
+GEN_TOKENS="${TQP_BENCH_GEN_TOKENS:-128}"
+
+tqp_require_binary "$LLAMA_BENCH"
+
 for CACHE_TYPE in q8_0 turbo4 turbo3; do
     echo ""
-    echo "=== \$CACHE_TYPE ==="
-    "$BUILD_DIR/bin/llama-bench" \
-        -m "\$MODEL_FILE" \
-        --cache-type-k "\$CACHE_TYPE" \
-        --cache-type-v "\$CACHE_TYPE" \
-        -ngl 99 \
-        -t "$CPU_COUNT" \
-        -p 512 \
-        -n 128
- done
+    echo "=== $CACHE_TYPE ==="
+    "$LLAMA_BENCH" \
+        -m "$MODEL_FILE" \
+        --cache-type-k "$CACHE_TYPE" \
+        --cache-type-v "$CACHE_TYPE" \
+        -ngl "$GPU_LAYERS" \
+        -t "$THREADS" \
+        -p "$PROMPT_TOKENS" \
+        -n "$GEN_TOKENS"
+done
 EOFBENCH
+chmod +x "$SCRIPT_DIR/turboquant_bench.sh"
+
+cat > "$SCRIPT_DIR/tqp_chat.sh" <<'EOFLEGACY'
+#!/bin/bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$SCRIPT_DIR/turboquant_chat.sh" "$@"
+EOFLEGACY
+chmod +x "$SCRIPT_DIR/tqp_chat.sh"
+
+cat > "$SCRIPT_DIR/tqp_chat_turbo3.sh" <<'EOFLEGACY3'
+#!/bin/bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$SCRIPT_DIR/turboquant_chat_turbo3.sh" "$@"
+EOFLEGACY3
+chmod +x "$SCRIPT_DIR/tqp_chat_turbo3.sh"
+
+cat > "$SCRIPT_DIR/tqp_server.sh" <<'EOFLEGACYSRV'
+#!/bin/bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$SCRIPT_DIR/turboquant_server.sh" "$@"
+EOFLEGACYSRV
+chmod +x "$SCRIPT_DIR/tqp_server.sh"
+
+cat > "$SCRIPT_DIR/tqp_bench.sh" <<'EOFLEGACYBENCH'
+#!/bin/bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$SCRIPT_DIR/turboquant_bench.sh" "$@"
+EOFLEGACYBENCH
 chmod +x "$SCRIPT_DIR/tqp_bench.sh"
 
-echo -e "${GREEN}  ✓ tqp_chat.sh${NC}"
-echo -e "${GREEN}  ✓ tqp_chat_turbo3.sh${NC}"
-echo -e "${GREEN}  ✓ tqp_server.sh${NC}"
-echo -e "${GREEN}  ✓ tqp_bench.sh${NC}"
+echo -e "${GREEN}  ✓ turboquant_common.sh${NC}"
+echo -e "${GREEN}  ✓ turboquant_chat.sh${NC}"
+echo -e "${GREEN}  ✓ turboquant_chat_turbo3.sh${NC}"
+echo -e "${GREEN}  ✓ turboquant_chat_long.sh${NC}"
+echo -e "${GREEN}  ✓ turboquant_server.sh${NC}"
+echo -e "${GREEN}  ✓ turboquant_bench.sh${NC}"
+echo -e "${GREEN}  ✓ tqp_* compatibility wrappers${NC}"
 
 echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗"
@@ -238,5 +361,6 @@ echo ""
 echo "설치 경로: $INSTALL_DIR"
 echo "다음 단계:"
 echo "  1. huggingface-cli download $MODEL_REPO --include '$MODEL_GLOB' --local-dir $MODEL_DIR"
-echo "  2. ./tqp_chat.sh"
-echo "  3. ./tqp_server.sh"
+echo "  2. ./turboquant_chat.sh"
+echo "     긴 컨텍스트가 필요하면: TQP_CTX_SIZE=65536 ./turboquant_chat_long.sh"
+echo "  3. ./turboquant_server.sh"
